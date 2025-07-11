@@ -848,60 +848,49 @@ def generate_self_signed_cert(base_dir, domain):
         sys.exit(1)
 
 def get_real_certificate(base_dir, domain, email="admin@example.com"):
-    """使用certbot获取真实的Let's Encrypt证书"""
+    """
+    使用 acme.sh 获取真实的 Let's Encrypt 证书（替代 certbot）
+    """
     cert_dir = f"{base_dir}/cert"
-    
+    os.makedirs(cert_dir, exist_ok=True)
+
+    acme_cert_dir = f"{Path.home()}/.acme.sh/{domain}_ecc"
+    acme_fullchain = f"{acme_cert_dir}/fullchain.cer"
+    acme_key = f"{acme_cert_dir}/{domain}.key"
+
+    cert_path = f"{cert_dir}/server.crt"
+    key_path = f"{cert_dir}/server.key"
+
     try:
-        # 检查是否已安装certbot
-        if not shutil.which('certbot'):
-            print("正在安装certbot...")
-            if platform.system().lower() == 'linux':
-                # Ubuntu/Debian
-                if shutil.which('apt'):
-                    subprocess.run(['sudo', 'apt', 'update'], check=True)
-                    subprocess.run(['sudo', 'apt', 'install', '-y', 'certbot'], check=True)
-                # CentOS/RHEL
-                elif shutil.which('yum'):
-                    subprocess.run(['sudo', 'yum', 'install', '-y', 'certbot'], check=True)
-                elif shutil.which('dnf'):
-                    subprocess.run(['sudo', 'dnf', 'install', '-y', 'certbot'], check=True)
-                else:
-                    print("无法自动安装certbot，请手动安装")
-                    return None, None
-            else:
-                print("请手动安装certbot")
-                return None, None
-        
-        # 使用standalone模式获取证书
-        print(f"正在为域名 {domain} 获取Let's Encrypt证书...")
+        # 检查 acme.sh 是否安装
+        if not shutil.which("acme.sh"):
+            print("🚀 acme.sh 未安装，正在安装...")
+            subprocess.run("curl https://get.acme.sh | sh", shell=True, check=True)
+            subprocess.run("source ~/.bashrc", shell=True, check=True)
+
+        print(f"📡 开始使用 acme.sh 为 {domain} 申请证书...")
+
+        # 执行 acme.sh 签发命令（使用 standalone 模式）
         subprocess.run([
-            'sudo', 'certbot', 'certonly',
-            '--standalone',
-            '--agree-tos',
-            '--non-interactive',
-            '--email', email,
-            '-d', domain
+            "acme.sh", "--issue", "--standalone",
+            "-d", domain,
+            "--keylength", "ec-256"
         ], check=True)
-        
-        # 复制证书到我们的目录
-        cert_source = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
-        key_source = f"/etc/letsencrypt/live/{domain}/privkey.pem"
-        cert_path = f"{cert_dir}/server.crt"
-        key_path = f"{cert_dir}/server.key"
-        
-        shutil.copy2(cert_source, cert_path)
-        shutil.copy2(key_source, key_path)
-        
-        # 设置权限
-        os.chmod(cert_path, 0o644)
-        os.chmod(key_path, 0o600)
-        
-        print(f"成功获取真实证书: {cert_path}")
+
+        # 确认证书文件存在
+        if not (os.path.exists(acme_fullchain) and os.path.exists(acme_key)):
+            raise FileNotFoundError("证书文件未生成，申请失败")
+
+        # 拷贝/软链证书到 hysteria 的 cert 目录
+        os.symlink(acme_fullchain, cert_path) if not os.path.exists(cert_path) else shutil.copy2(acme_fullchain, cert_path)
+        os.symlink(acme_key, key_path) if not os.path.exists(key_path) else shutil.copy2(acme_key, key_path)
+
+        print(f"✅ 证书申请成功！路径如下：\n证书: {cert_path}\n私钥: {key_path}")
         return cert_path, key_path
-        
+
     except Exception as e:
-        print(f"获取真实证书失败: {e}")
-        print("将使用自签名证书作为备选...")
+        print(f"❌ 使用 acme.sh 获取证书失败: {e}")
+        print("⚠️ 将退回使用自签名证书（可选）")
         return None, None
 
 def create_config(base_dir, port, password, cert_path, key_path, domain, enable_web_masquerade=True, custom_web_dir=None, enable_port_hopping=False, obfs_password=None, enable_http3_masquerade=False):
